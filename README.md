@@ -66,6 +66,16 @@ It's a thin UI over the same public `State` API the bots and
 `state.player_state(player)`) — nothing game-specific lives in `app.py`
 itself beyond layout.
 
+The board is genuinely graphical, not just text: `app_graphics.py` renders
+the Forum (4 quadrants, dice colored and grouped by cost) and each
+player's building progress (one row per building, a small square per
+space — filled once crossed, colored by the building's die color) as
+inline SVG, and a live Plotly chart tracks every player's VP across
+rounds (hover/zoom/pan — real interactivity, not a static image). Action
+selection stays button-based rather than click-on-the-graphic, since
+that's far more reliable across browsers than hand-rolled SVG hit
+detection.
+
 ## How the game maps to OpenSpiel
 
 - **Dynamics**: `SIMULTANEOUS` — every round, all players privately choose
@@ -164,6 +174,7 @@ src/sevenwonders_dice/
 tests/             unit + random-playthrough + bot tests
 examples/          random_sim.py, evaluate_bots.py
 app.py             Streamlit human-vs-bot UI (see "Play against a bot")
+app_graphics.py    SVG rendering for the Forum/board (used by app.py)
 ```
 
 ## License

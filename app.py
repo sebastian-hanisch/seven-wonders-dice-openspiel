@@ -11,30 +11,20 @@ that examples/evaluate_bots.py drives, one rerun at a time.
 
 import random
 
+import plotly.graph_objects as go
 import pyspiel
 import streamlit as st
 
 import sevenwonders_dice  # noqa: F401  (registers the games)
+from app_graphics import render_board_svg, render_forum_svg
 from sevenwonders_dice.bots import HeuristicBot, RandomBot, SearchBot
 from sevenwonders_dice.bots.base import advance_through_chance_nodes
-from sevenwonders_dice.constants import BuildingKind
-from sevenwonders_dice.describe import BUILDING_NAMES, DIE_COLOR_NAMES
-from sevenwonders_dice.player_state import (AGORA_SPACES, GALLERY_SPACES,
-                                             GUILD_COURT_SPACES,
-                                             MARKET_SPACES,
-                                             UNIVERSITY_LANE_SPACES,
-                                             WAREHOUSE_SPACES, WONDER_SPACES)
+from sevenwonders_dice.player_state import WONDER_SPACES
 
 st.set_page_config(page_title="7 Wonders Dice", page_icon="\U0001F3DB️", layout="wide")
 
-_PROGRESS_BUILDINGS = [
-    (BuildingKind.WAREHOUSE, WAREHOUSE_SPACES),
-    (BuildingKind.AGORA, AGORA_SPACES),
-    (BuildingKind.MARKET, MARKET_SPACES),
-    (BuildingKind.UNIVERSITY, UNIVERSITY_LANE_SPACES * 3),
-    (BuildingKind.GUILD_COURT, GUILD_COURT_SPACES),
-    (BuildingKind.GALLERY, GALLERY_SPACES),
-]
+_PLAYER_LINE_COLORS = ["#3b6fa8", "#c0392b", "#4a8f4a", "#d4a72c",
+                        "#7d5ba6", "#e07b39", "#2ba3a3"]
 
 _BOT_FACTORIES = {
     "Random": lambda rng, sims: RandomBot(rng),
@@ -64,7 +54,16 @@ def _start_game(num_players: int, human_seat: int, bot_choice: str,
   st.session_state.human_seat = human_seat
   st.session_state.bots = bots
   st.session_state.log = []
+  st.session_state.vp_history = []
   _log(f"New game: {num_players} players, you are seat {human_seat}.")
+
+
+def _record_vp_snapshot() -> None:
+  state = st.session_state.state
+  snapshot = {p: state.player_state(p).total_end_game_vp()
+              for p in range(state.num_players())
+              if state.player_state(p) is not None}
+  st.session_state.vp_history.append(snapshot)
 
 
 def _advance_until_human_turn_or_terminal() -> None:
@@ -110,6 +109,7 @@ def _apply_human_action(action: int) -> None:
     state.apply_action(action)
 
   _advance_until_human_turn_or_terminal()
+  _record_vp_snapshot()
 
 
 def _render_setup() -> None:
@@ -128,16 +128,14 @@ def _render_setup() -> None:
   if submitted:
     _start_game(num_players, human_seat, bot_choice, sims, seed)
     _advance_until_human_turn_or_terminal()
+    _record_vp_snapshot()
     st.rerun()
 
 
 def _render_forum() -> None:
   state = st.session_state.state
   st.subheader("Forum")
-  forum = state.forum_summary()
-  cols = st.columns(len(forum))
-  for i, (col, (color, cost)) in enumerate(zip(cols, forum)):
-    col.metric(f"Die #{i}", DIE_COLOR_NAMES[color], f"{cost} coins")
+  st.markdown(render_forum_svg(state.forum_summary()), unsafe_allow_html=True)
 
 
 def _render_player_panel(state, player: int, label: str) -> None:
@@ -146,17 +144,34 @@ def _render_player_panel(state, player: int, label: str) -> None:
                     expanded=(player == st.session_state.human_seat)):
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Coins", ps.coins)
-    c2.metric("Resources", ps.resources)
+    c2.metric("Res.", ps.resources)
     c3.metric("Wonder", f"{ps.wonder_crossed}/{WONDER_SPACES}")
-    c4.metric("Bonuses", f"{ps.bonus_crossed}/3")
+    c4.metric("Bonus", f"{ps.bonus_crossed}/3")
     st.progress(min(1.0, ps.total_end_game_vp() / 60.0),
                 text=f"~{ps.total_end_game_vp()} VP so far")
-    for kind, total in _PROGRESS_BUILDINGS:
-      st.caption(f"{BUILDING_NAMES[kind]}: {ps.building_progress(kind)}/{total}")
-    st.caption(f"Western Barracks: {ps.barracks_w_attack}/5 atk, "
-               f"{ps.barracks_w_defense}/2 def  |  "
-               f"Eastern Barracks: {ps.barracks_e_attack}/5 atk, "
-               f"{ps.barracks_e_defense}/2 def")
+    st.markdown(render_board_svg(ps), unsafe_allow_html=True)
+
+
+def _render_vp_chart() -> None:
+  history = st.session_state.vp_history
+  if len(history) < 2:
+    return
+  state = st.session_state.state
+  human = st.session_state.human_seat
+  fig = go.Figure()
+  for p in range(state.num_players()):
+    ys = [snap.get(p) for snap in history]
+    name = "You" if p == human else f"Player {p}"
+    color = _PLAYER_LINE_COLORS[p % len(_PLAYER_LINE_COLORS)]
+    fig.add_trace(go.Scatter(
+        x=list(range(len(ys))), y=ys, mode="lines+markers", name=name,
+        line=dict(color=color, width=3 if p == human else 2)))
+  fig.update_layout(
+      height=280, margin=dict(l=10, r=10, t=30, b=10),
+      xaxis_title="round", yaxis_title="VP so far",
+      legend=dict(orientation="h", yanchor="bottom", y=1.02),
+      template="plotly_dark")
+  st.plotly_chart(fig, use_container_width=True)
 
 
 def _render_game() -> None:
@@ -166,7 +181,7 @@ def _render_game() -> None:
   top = st.columns([3, 1])
   with top[1]:
     if st.button("New game"):
-      for key in ("state", "game", "rng", "human_seat", "bots", "log"):
+      for key in ("state", "game", "rng", "human_seat", "bots", "log", "vp_history"):
         st.session_state.pop(key, None)
       st.rerun()
 
@@ -177,6 +192,8 @@ def _render_game() -> None:
   for p in range(state.num_players()):
     with cols[p]:
       _render_player_panel(state, p, "You" if p == human else f"Player {p}")
+
+  _render_vp_chart()
 
   st.subheader("Log")
   st.text("\n".join(st.session_state.log[-12:]) or "(nothing yet)")
