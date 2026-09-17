@@ -102,6 +102,13 @@ class SevenWondersDiceState(pyspiel.State):
     if self._phase in ("DEAL", "SHAKE"):
       return pyspiel.PlayerId.CHANCE
     if self._phase == "ACTION":
+      # With exactly one player, a SIMULTANEOUS round with one actor is the
+      # same thing as a sequential decision -- returning the concrete
+      # player id here (instead of SIMULTANEOUS) is what lets the solo
+      # game variant (see game.py) declare itself SEQUENTIAL and be solved
+      # directly by OpenSpiel's own MCTSBot. See bots/mcts_bot.py.
+      if self._num_players == 1:
+        return 0
       return pyspiel.PlayerId.SIMULTANEOUS
     if self._phase == "BONUS":
       return self._bonus_queue[0]
@@ -138,6 +145,9 @@ class SevenWondersDiceState(pyspiel.State):
         self._bonus_queue.pop(0)
       if not self._bonus_queue:
         self._advance_round_or_end()
+    elif self._phase == "ACTION" and self._num_players == 1:
+      self._pending_round_actions = {0: action}
+      self._resolve_round()
     else:
       raise ValueError(self._phase)
 
@@ -161,6 +171,32 @@ class SevenWondersDiceState(pyspiel.State):
     """Read-only access to a player's board/economy, for observers and bots.
     `None` until that player's board has been dealt."""
     return self._players[player]
+
+  def make_solo_snapshot(self, player: int, solo_game) -> "SevenWondersDiceState":
+    """Builds a 1-player solo-mode state (see game.py's SEQUENTIAL solo
+    game variant) seeded with `player`'s current progress and the live
+    Forum, at the same decision point `player` is actually facing right
+    now (same dice, same costs) -- ready to hand to OpenSpiel's own
+    MCTSBot. See bots/mcts_bot.py for why this is sound: a player's own
+    outcome this round never depends on what others simultaneously pick
+    (RULES.md), so freezing everyone else's current standing (for Guild
+    Court/Barracks) and letting `player` search on alone is not an
+    approximation of the round in progress, only of future rounds (where
+    it ignores that opponents keep playing too). Works from either an
+    ACTION (simultaneous round) or BONUS (this player's own follow-up
+    decision) decision point -- whichever `player` is actually facing.
+    """
+    assert self._phase in ("ACTION", "BONUS")
+    if self._phase == "BONUS":
+      assert self._bonus_queue and self._bonus_queue[0] == player
+    solo = SevenWondersDiceState(solo_game, 1)
+    solo._phase = self._phase
+    solo._bonus_queue = [0] if self._phase == "BONUS" else []
+    solo._players = [self._players[player].clone()]
+    solo._forum_colors = list(self._forum_colors)
+    solo._forum_faces = list(self._forum_faces)
+    solo._forum_quadrant = list(self._forum_quadrant)
+    return solo
 
   # -- DEAL phase ----------------------------------------------------------
 
@@ -263,6 +299,11 @@ class SevenWondersDiceState(pyspiel.State):
     if self._num_players == 2:
       other = self._players[1 - me]
       return my_count > other.building_progress(target_building)
+    # num_players == 1 (solo mode, see game.py) falls through here too:
+    # both "neighbors" resolve to the player themselves, so the condition
+    # degenerates to my_count >= my_count -- always true, i.e. no
+    # opponents means no Guild Court gating friction. That's a deliberate
+    # consequence of the general formula, not a special case.
     left = self._players[(me - 1) % self._num_players]
     right = self._players[(me + 1) % self._num_players]
     return (my_count >= left.building_progress(target_building) and
@@ -383,6 +424,12 @@ class SevenWondersDiceState(pyspiel.State):
 
   def _score_barracks_attack(self, player, kind, space):
     ps = self._players[player]
+    if self._num_players == 1:
+      # No neighbor to attack in solo mode (see game.py's solo variant) --
+      # treat it the same as attacking an undefended city (rulebook: "if
+      # the city has no defense, gain the indicated Victory Points").
+      ps.barracks_vp_total += space.printed_vp
+      return
     is_west = kind == BuildingKind.BARRACKS_WEST
     target = self._players[(player - 1) % self._num_players] if is_west \
         else self._players[(player + 1) % self._num_players]

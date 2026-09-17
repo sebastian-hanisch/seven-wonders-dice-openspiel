@@ -60,7 +60,9 @@ pytest -q
 - **Information**: perfect information + stochastic — like backgammon,
   everything is public except future die outcomes.
 - Player counts 2–7 are supported via the `players` game parameter
-  (default 4).
+  (default 4). A second registered game, `python_seven_wonders_dice_solo`,
+  is the same engine as a `SEQUENTIAL`, 1-player variant — see "Bots"
+  below for why.
 
 See [`src/sevenwonders_dice/state.py`](src/sevenwonders_dice/state.py) for
 the full state machine and a list of the (documented) simplifications made
@@ -78,40 +80,53 @@ Three bots live in `src/sevenwonders_dice/bots/`, in increasing strength
 |---|---|---|
 | `RandomBot` | uniform random legal action | trivial |
 | `HeuristicBot` | greedy: clone + apply each legal action, score the result (VP + coins + resources + building progress), greedily resolve short BONUS-effect chains the same way | cheap |
-| `SearchBot` | flat Monte Carlo / decoupled-UCB1 bandit over its own root actions, backed by short `HeuristicBot`-driven rollouts | ~2-5s per decision by default; a full multi-round game can take several minutes. Lower `num_rollouts`/`horizon_decisions` trade strength for speed. |
+| `SearchBot` | OpenSpiel's own `mcts.MCTSBot`, run on a per-decision snapshot (see below) | ~2-5s per decision at the default 100 simulations; tune `max_simulations` for strength vs. speed |
 
 They're plain Python classes (`step(state, player) -> action`), not
-`pyspiel.Bot` subclasses — see `bots/base.py` for why. Try them:
+`pyspiel.Bot` subclasses (`SearchBot` wraps a real `pyspiel.Bot` internally,
+but its own interface matches the other two) — see `bots/base.py` for why.
+Try them:
 
 ```bash
 python examples/evaluate_bots.py --games 50 --seats random,heuristic,search,heuristic
 ```
 
-**Why `SIMULTANEOUS` needed a custom search bot**: OpenSpiel's built-in
-`mcts.py` assumes one actor per tree node, so it doesn't apply here
-directly. `SearchBot` instead runs UCB1 as a bandit over *its own* legal
-actions only (no combinatorial blow-up from also branching on what
-opponents might do), evaluating each by simulation. Two things that
-mattered once actually measured, not just designed on paper (see
-`bots/search_bot.py`'s docstring for the full story):
+**Using OpenSpiel's own MCTS on a `SIMULTANEOUS` game.** `mcts.MCTSBot`
+hard-requires `GameType.dynamics == SEQUENTIAL` and refuses this game
+outright — but the game barely needs `SIMULTANEOUS` in the first place: a
+player's own progress, coins and VP this round never depend on what anyone
+else simultaneously picks (dice are never removed from the Forum), only on
+the shake and their own choice. The only thing opponents contribute to a
+decision is their *current standing*, for Guild Court/Barracks comparisons.
+That makes one player's decision problem close to a solitaire MDP, not a
+genuinely multi-agent one — so `game.py` registers a second, SEQUENTIAL,
+1-player variant of the *same* game (`python_seven_wonders_dice_solo`,
+same `State` class — a 1-player `SIMULTANEOUS` round already collapses to
+a plain sequential decision), `SevenWondersDiceState.make_solo_snapshot()`
+freezes a live position into it, and OpenSpiel's real `MCTSBot` solves
+that snapshot directly. The one thing this can't see is opponents' future
+moves (e.g. a race to end the game by hitting 3 bonuses first) — a small
+approximation given how little the rulebook actually couples players
+within a round.
 
-- **Rollout policy quality beats rollout depth.** A first version with
-  uniform-random rollouts to a true terminal state *lost most games to
-  the plain heuristic bot* — simulating "everyone plays randomly from
-  here" is a bad model of an actual opponent. Swapping in a cheap
-  `HeuristicBot` variant for rollouts (and cutting them short instead of
-  always running to terminal) fixed it.
-- **UCB1's exploration constant has to match the reward scale.** The
-  textbook `c = sqrt(2)` assumes rewards in [0, 1]; this game's returns
-  are raw VP totals (~20-100), so the exploration term needs to be
-  normalized or it's negligible next to the mean and the bandit barely
-  explores.
-- Also worth knowing before you tune it: an early version of
-  `HeuristicBot` itself passed ~70% of the time instead of building,
-  because its scoring weighted the guaranteed +3 coins from passing over
-  building progress. Fixed by adding an explicit progress term — see
-  `tests/test_bots.py::test_heuristic_bot_builds_more_than_it_passes`,
-  kept as a regression test.
+A hand-rolled decoupled-UCB1 bandit (the "naive" way to search a
+`SIMULTANEOUS` game — treat it as a 1-ply bandit over your own actions,
+backed by rollouts) was the first version of `SearchBot`. It worked, after
+fixing two real bugs found by actually measuring it — a uniform-random
+rollout policy lost most games to plain `HeuristicBot` (a bad model of a
+competent opponent), and UCB1's exploration constant needed rescaling from
+the textbook `[0, 1]` assumption to this game's VP-sized returns — but it
+was still a from-scratch reimplementation of something the framework
+already does well. See `bots/search_bot.py`'s docstring for the full
+story of both versions, kept there since the failure modes are the useful
+part.
+
+Also worth knowing: an early version of `HeuristicBot` passed ~70% of the
+time instead of building, because its scoring weighted the guaranteed +3
+coins from passing over building progress. Fixed by adding an explicit
+progress term — see
+`tests/test_bots.py::test_heuristic_bot_builds_more_than_it_passes`, kept
+as a regression test.
 
 ## Project layout
 
@@ -122,8 +137,10 @@ src/sevenwonders_dice/
   boards.py        the 7 city boards (see RULES.md for data provenance)
   dice.py          die faces + the Forum shake mechanic
   player_state.py  per-player economy/progress tracking
-  state.py         the OpenSpiel State (game loop, legality, scoring)
-  game.py          the OpenSpiel Game (registration, GameType/GameInfo)
+  state.py         the OpenSpiel State (game loop, legality, scoring,
+                   plus make_solo_snapshot() -- see "Bots" above)
+  game.py          both registered Games: the SIMULTANEOUS multiplayer
+                   game and its SEQUENTIAL 1-player "solo" variant
   observer.py      human-readable state observations
   bots/            RandomBot, HeuristicBot, SearchBot (see "Bots" above)
 tests/             unit + random-playthrough + bot tests

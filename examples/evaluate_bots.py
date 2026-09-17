@@ -2,12 +2,11 @@
 
 Usage:
     python examples/evaluate_bots.py --games 100 --seats random,heuristic,search,heuristic
-    python examples/evaluate_bots.py --games 30 --seats heuristic,search --rollouts 128
+    python examples/evaluate_bots.py --games 10 --seats heuristic,search --simulations 200
 """
 
 import argparse
 import random
-import statistics
 import time
 
 import pyspiel
@@ -15,14 +14,15 @@ import sevenwonders_dice  # noqa: F401  (registers the game)
 from sevenwonders_dice.bots import HeuristicBot, RandomBot, SearchBot, play_full_game
 
 BOT_FACTORIES = {
-    "random": lambda rng, rollouts: RandomBot(rng),
-    "heuristic": lambda rng, rollouts: HeuristicBot(),
-    "search": lambda rng, rollouts: SearchBot(num_rollouts=rollouts, rng=rng),
+    "random": lambda rng, simulations: RandomBot(rng),
+    "heuristic": lambda rng, simulations: HeuristicBot(),
+    "search": lambda rng, simulations: SearchBot(
+        max_simulations=simulations, seed=rng.randrange(2**31)),
 }
 
 
-def build_bots(seat_names, rng, rollouts):
-  return [BOT_FACTORIES[name](rng, rollouts) for name in seat_names]
+def build_bots(seat_names, rng, simulations):
+  return [BOT_FACTORIES[name](rng, simulations) for name in seat_names]
 
 
 def main():
@@ -31,8 +31,8 @@ def main():
   parser.add_argument("--seats", type=str, default="random,heuristic,search,heuristic",
                        help="comma-separated bot names (random|heuristic|search), "
                             "one per seat -- also sets the number of players")
-  parser.add_argument("--rollouts", type=int, default=64,
-                       help="SearchBot rollout budget per decision")
+  parser.add_argument("--simulations", type=int, default=100,
+                       help="SearchBot MCTS simulation budget per decision")
   parser.add_argument("--seed", type=int, default=0)
   args = parser.parse_args()
 
@@ -46,7 +46,7 @@ def main():
   start = time.time()
 
   for game_idx in range(args.games):
-    bots = build_bots(seat_names, rng, args.rollouts)
+    bots = build_bots(seat_names, rng, args.simulations)
     state = play_full_game(game, bots, rng)
     returns = state.returns()
     for p, r in enumerate(returns):

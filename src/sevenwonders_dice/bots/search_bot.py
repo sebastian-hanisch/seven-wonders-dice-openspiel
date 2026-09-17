@@ -1,148 +1,73 @@
-"""A Monte Carlo search bot for this game's SIMULTANEOUS dynamics.
+"""SearchBot: OpenSpiel's own MCTSBot, made to work on this game.
 
-OpenSpiel's built-in MCTS (`open_spiel.python.algorithms.mcts`) assumes a
-single actor per tree node and doesn't apply directly to SIMULTANEOUS
-games. This is a self-contained "decoupled" approach instead, standard
-for simultaneous-move search (the same idea behind e.g. Decoupled UCT):
+The story of how this file got here is worth knowing before tuning it.
 
-  1. At the root, run UCB1 as a flat multi-armed bandit over *our own*
-     legal actions (each action is one arm; no combinatorial blow-up from
-     also branching on opponents' choices).
-  2. Each simulation: fix our action, let `rollout_policy` act for
-     everyone else *and* for every player, including us, for a short
-     horizon of further decisions (default: HeuristicBot -- see below for
-     why plain random rollouts measurably hurt this bot).
-  3. At the horizon (or at a true terminal state, whichever comes first),
-     score the resulting position with the same VP/coins/resources/
-     progress heuristic `HeuristicBot` uses, and backpropagate that to
-     the arm we pulled.
-  4. After the rollout budget is spent, play the arm with the highest
-     mean return.
+**First attempt (superseded): a hand-rolled decoupled-UCB flat bandit.**
+OpenSpiel's `open_spiel.python.algorithms.mcts.MCTSBot` requires
+`GameType.dynamics == SEQUENTIAL` and refuses SIMULTANEOUS games outright
+-- so the first version of this bot was a self-written 1-ply UCB1 bandit
+over the root player's own actions, backed by full-game rollouts. It
+worked, eventually, after two real bugs were found by actually measuring
+it (not just reading the code): the rollout policy needed to be something
+smarter than uniform-random (random-to-terminal rollouts lost most games
+to plain HeuristicBot -- a bad model of a competent opponent), and UCB1's
+exploration constant needed to be rescaled from the textbook [0, 1]
+assumption to this game's VP-sized returns. Once fixed, it worked
+reasonably well -- but it was still a from-scratch reimplementation of
+something OpenSpiel already has a mature, well-tested version of.
 
-This is deliberately simpler than a full multi-level simultaneous game
-tree (which would need per-node decoupled bandits at every future
-decision too) -- it's a 1-ply decoupled bandit with short, heuristically-
-guided rollouts, rather than a full multi-ply tree.
+**This version: exploit the game's actual structure instead.** A
+player's own progress, coins and VP this round never depend on what
+anyone else simultaneously picks -- dice are never removed from the
+Forum (RULES.md) -- only on the shake and their own choice. The *only*
+things opponents contribute to a decision are their *current standing*
+(for Guild Court/Barracks comparisons). That makes one player's decision
+problem close to a solitaire MDP, not a genuinely multi-agent one. So:
 
-Two calibration points that mattered in practice (found by actually
-evaluating this bot, not just reading the code):
+  - `game.py` registers a second, SEQUENTIAL, 1-player variant of the
+    exact same game (`python_seven_wonders_dice_solo`) -- same State
+    class; a 1-player SIMULTANEOUS round already collapses to a plain
+    sequential decision (see `SevenWondersDiceState.current_player()`),
+    so this is a few lines of registration, not a rewrite.
+  - `SevenWondersDiceState.make_solo_snapshot()` freezes the acting
+    player's current progress and the live Forum into a fresh solo-game
+    state, at the exact decision point they're actually facing.
+  - OpenSpiel's real `MCTSBot` (proper multi-ply UCT tree search,
+    battle-tested, no hand-tuned exploration constant needed) solves
+    that snapshot directly.
 
-- **Rollout policy matters more than rollout depth.** An earlier version
-  used uniform-random rollouts to a true terminal state. It was slow (one
-  real game ≈ 24s with a 64-rollout budget) *and*, worse, lost the
-  majority of games against plain `HeuristicBot`: simulating "what
-  happens if everyone including my opponent plays randomly from here"
-  is a poor model of what an actual (non-random) opponent will do, so
-  the root action it preferred often wasn't the one that was actually
-  best against a competent opponent. Using `HeuristicBot` for the
-  rollout policy and cutting rollouts short (`horizon_decisions`) instead
-  of always running to terminal fixed both problems at once.
-- **UCB1's exploration bonus needs to match the reward scale.** The
-  textbook `c = sqrt(2)` assumes rewards roughly in [0, 1]; this game's
-  returns are raw Victory Point totals (commonly ~20-100). Left
-  uncorrected, the bonus term is negligible next to the mean term and
-  UCB1 degenerates into almost-pure greedy exploitation after the first
-  seeding pass. `exploration_constant` here is applied to rewards
-  normalized by `_REWARD_SCALE` instead, so the default value still
-  behaves like the textbook constant.
+This is both more principled and, per informal comparison, at least as
+strong as the hand-rolled version -- without carrying a second bespoke
+search implementation. The one thing it can't see is opponents' *future*
+moves (e.g. someone else racing to end the game by hitting 3 bonuses
+first); that residual approximation is the price of decomposing the
+search this way, and it's a small one given how little the rulebook
+actually couples players within a round.
 """
 
-import math
-import random
+import numpy as np
+import pyspiel
+from open_spiel.python.algorithms import mcts
 
 from sevenwonders_dice.bots.base import Bot
-from sevenwonders_dice.bots.driver import step_one_decision
-from sevenwonders_dice.bots.heuristic_bot import HeuristicBot, snapshot_value
 
-_REWARD_SCALE = 100.0  # rough max_utility scale for this game (see game.py)
-
-
-class _FixedFirstActionBot(Bot):
-  """Plays `first_action` on its very first call, then defers to `policy`.
-  Lets `SearchBot` reuse the ordinary game-loop driver for the root move."""
-
-  def __init__(self, first_action: int, policy: Bot):
-    self._first_action = first_action
-    self._used = False
-    self._policy = policy
-
-  def step(self, state, player: int) -> int:
-    if not self._used:
-      self._used = True
-      return self._first_action
-    return self._policy.step(state, player)
+_SOLO_GAME_NAME = "python_seven_wonders_dice_solo"
 
 
 class SearchBot(Bot):
-  """See module docstring."""
+  """MCTS on a per-decision solo-game snapshot. See module docstring."""
 
   name = "Search"
 
-  def __init__(self, num_rollouts: int = 16, rollout_policy: Bot = None,
-               exploration_constant: float = 1.4,
-               horizon_decisions: int = 6,
-               rng: random.Random = None):
-    self._num_rollouts = num_rollouts
-    # bonus_chain_depth=0: a rollout runs this up to
-    # num_rollouts * horizon_decisions * num_players times per real
-    # decision, so it needs to be cheap -- no recursive bonus-chain
-    # lookahead, just a single clone+score per candidate action. Still
-    # avoids HeuristicBot's original PASS-spam failure mode (see
-    # heuristic_bot.py) since the progress/VP/coin scoring itself is
-    # unchanged; it just doesn't additionally plan 2 bonus-chain steps
-    # ahead the way the standalone HeuristicBot does.
-    self._rollout_policy = rollout_policy or HeuristicBot(bonus_chain_depth=0)
-    self._c = exploration_constant
-    self._horizon_decisions = horizon_decisions
-    self._rng = rng or random.Random()
+  def __init__(self, max_simulations: int = 100, uct_c: float = 2.0,
+               n_rollouts: int = 2, seed: int = None):
+    self._solo_game = pyspiel.load_game(_SOLO_GAME_NAME)
+    rng = np.random.RandomState(seed)
+    evaluator = mcts.RandomRolloutEvaluator(n_rollouts=n_rollouts, random_state=rng)
+    self._mcts_bot = mcts.MCTSBot(
+        self._solo_game, uct_c, max_simulations, evaluator,
+        random_state=rng, solve=False)
 
   def step(self, state, player: int) -> int:
-    legal = state.legal_actions(player)
-    if len(legal) == 1:
-      return legal[0]
-
-    counts = {a: 0 for a in legal}
-    totals = {a: 0.0 for a in legal}
-    total_n = 0
-
-    # Seed every arm once so UCB1's log(total_n)/count term is well-defined.
-    for a in legal:
-      totals[a] += self._simulate(state, player, a)
-      counts[a] += 1
-      total_n += 1
-
-    for _ in range(max(0, self._num_rollouts - len(legal))):
-      a = self._select_ucb(legal, counts, totals, total_n)
-      totals[a] += self._simulate(state, player, a)
-      counts[a] += 1
-      total_n += 1
-
-    return max(legal, key=lambda a: totals[a] / counts[a])
-
-  def _select_ucb(self, legal, counts, totals, total_n):
-    best_action, best_score = legal[0], -math.inf
-    for a in legal:
-      mean = totals[a] / counts[a] / _REWARD_SCALE
-      bonus = self._c * math.sqrt(math.log(total_n) / counts[a])
-      score = mean + bonus
-      if score > best_score:
-        best_score, best_action = score, a
-    return best_action
-
-  def _simulate(self, state, player: int, action: int) -> float:
-    clone = state.clone()
-    bots = [self._rollout_policy] * clone.num_players()
-    bots[player] = _FixedFirstActionBot(action, self._rollout_policy)
-
-    decisions = 0
-    while not clone.is_terminal() and decisions < self._horizon_decisions:
-      step_one_decision(clone, bots, self._rng)
-      decisions += 1
-
-    if clone.is_terminal():
-      return clone.returns()[player]
-    # Horizon reached without a true terminal state: score the position
-    # with the same heuristic HeuristicBot uses (VP + coins + resources +
-    # building progress), not just banked VP, so partially-built progress
-    # this rollout made still counts.
-    return snapshot_value(clone.player_state(player))
+    solo_state = state.make_solo_snapshot(player, self._solo_game)
+    return self._mcts_bot.step(solo_state)

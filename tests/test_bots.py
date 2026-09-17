@@ -80,40 +80,37 @@ def test_heuristic_bot_beats_random_bot_on_average():
 def test_search_bot_always_legal_and_finishes_with_tiny_budget():
   rng = random.Random(0)
   game = pyspiel.load_game("python_seven_wonders_dice", {"players": 2})
-  bots = [RandomBot(rng), SearchBot(num_rollouts=4, horizon_decisions=2, rng=rng)]
+  bots = [RandomBot(rng), SearchBot(max_simulations=8, n_rollouts=1, seed=0)]
   state = play_full_game(game, bots, rng)
   assert state.is_terminal()
 
 
-def test_search_bot_prefers_the_higher_scoring_simulated_action():
-  # Cheap, deterministic unit test of the bandit itself rather than a full
-  # game: with a rollout budget big enough to try every arm many times and
-  # a fixed rng, it should consistently prefer an action a stub rollout
-  # policy scores strictly higher than the alternatives.
-  class _StubPolicy:
-    """Always passes -- makes _simulate's outcome depend almost entirely
-    on the root action, so the bandit's preference is unambiguous."""
-
-    def step(self, state, player):
-      from sevenwonders_dice.state import ACTION_PASS
-      return ACTION_PASS
-
+def test_search_bot_returns_a_legal_action():
   rng = random.Random(0)
   game = pyspiel.load_game("python_seven_wonders_dice", {"players": 2})
   from sevenwonders_dice.bots.base import advance_through_chance_nodes
   state = game.new_initial_state()
   advance_through_chance_nodes(state, rng)
 
-  bot = SearchBot(num_rollouts=20, horizon_decisions=1,
-                   rollout_policy=_StubPolicy(), rng=rng)
+  bot = SearchBot(max_simulations=16, n_rollouts=1, seed=0)
   action = bot.step(state, 0)
-  legal = state.legal_actions(0)
-  assert action in legal
+  assert action in state.legal_actions(0)
 
-  from sevenwonders_dice.state import ACTION_PASS
-  if ACTION_PASS in legal and len(legal) > 1:
-    # With horizon_decisions=1 the simulated return *is* the immediate
-    # post-root-action snapshot (VP + coins + resources + progress -- see
-    # heuristic_bot.snapshot_value), so the bandit should reliably prefer
-    # any building/wonder move over an all-PASS root action.
-    assert action != ACTION_PASS
+
+def test_make_solo_snapshot_matches_the_live_decision():
+  # The solo snapshot (SearchBot's bridge to OpenSpiel's own MCTSBot -- see
+  # search_bot.py) needs to represent *exactly* the decision the acting
+  # player is actually facing: same legal actions, now a plain sequential
+  # decision for player 0.
+  rng = random.Random(0)
+  game = pyspiel.load_game("python_seven_wonders_dice", {"players": 3})
+  solo_game = pyspiel.load_game("python_seven_wonders_dice_solo")
+  from sevenwonders_dice.bots.base import advance_through_chance_nodes
+  state = game.new_initial_state()
+  advance_through_chance_nodes(state, rng)
+  assert state.current_player() == pyspiel.PlayerId.SIMULTANEOUS
+
+  for player in range(3):
+    solo = state.make_solo_snapshot(player, solo_game)
+    assert solo.current_player() == 0
+    assert sorted(solo.legal_actions(0)) == sorted(state.legal_actions(player))
