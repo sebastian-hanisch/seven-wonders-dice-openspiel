@@ -15,10 +15,14 @@ are best-effort reconstructions.
 
 ## Install
 
-Requires Python 3.11+ (OpenSpiel ships prebuilt wheels for 3.11–3.13,
-including native Windows).
+Requires Python 3.11+. OpenSpiel ships prebuilt wheels for 3.11–3.14 on
+Windows, Linux and macOS, so a plain `pip install` works natively —
+verified here in a fresh venv on the latest Python (3.14) with current
+dependency versions, no build toolchain needed.
 
 ```bash
+python -m venv .venv
+.venv\Scripts\activate   # or: source .venv/bin/activate on Linux/macOS
 pip install -e ".[dev]"
 ```
 
