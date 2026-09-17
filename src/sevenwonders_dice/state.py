@@ -26,6 +26,8 @@ from sevenwonders_dice.constants import (ActionType, BONUSES_TO_END_GAME,
                                           NUM_QUADRANTS, PASS_COINS,
                                           QUADRANT_COSTS, SPECIAL_DICE,
                                           STARTING_DICE)
+from sevenwonders_dice.describe import (BUILDING_NAMES, DIE_COLOR_NAMES,
+                                         describe_effects)
 from sevenwonders_dice.dice import (FACES, NUM_SHAKE_OUTCOMES_PER_DIE,
                                      decode_shake_outcome)
 from sevenwonders_dice.player_state import (AGORA_SPACES,
@@ -172,6 +174,13 @@ class SevenWondersDiceState(pyspiel.State):
     `None` until that player's board has been dealt."""
     return self._players[player]
 
+  def forum_summary(self):
+    """[(DieColor, quadrant_cost), ...] for the 7 Forum dice, in slot
+    order, for observers/UIs. Empty during the DEAL phase (before the
+    first shake)."""
+    return [(c, QUADRANT_COSTS[q])
+            for c, q in zip(self._forum_colors, self._forum_quadrant)]
+
   def make_solo_snapshot(self, player: int, solo_game) -> "SevenWondersDiceState":
     """Builds a 1-player solo-mode state (see game.py's SEQUENTIAL solo
     game variant) seeded with `player`'s current progress and the live
@@ -197,6 +206,48 @@ class SevenWondersDiceState(pyspiel.State):
     solo._forum_faces = list(self._forum_faces)
     solo._forum_quadrant = list(self._forum_quadrant)
     return solo
+
+  # -- human-readable descriptions (for the Streamlit app / debugging) ----
+
+  def legal_action_descriptions(self, player: int):
+    """[(action, description), ...] for every currently legal action of
+    `player`, in the same order as legal_actions(player)."""
+    return [(a, self.describe_action(player, a))
+            for a in self.legal_actions(player)]
+
+  def describe_action(self, player: int, action: int) -> str:
+    ps = self._players[player]
+    if self._phase == "BONUS":
+      kind, _arg = ps.pending_bonus_actions[0]
+      if kind == "CHOOSE_BONUS":
+        effect = ps.board.bonus_slots[action]
+        return f"Choose bonus {action + 1}/3: {describe_effects((effect,))}"
+      if kind == "FREE_A":
+        return "(free action, no die cost) " + self._describe_build_or_pass(ps, action, free=True)
+      if kind == "ANY":
+        return "(bonus action) " + self._describe_build_or_pass(ps, action)
+      raise ValueError(kind)
+    return self._describe_build_or_pass(ps, action)
+
+  def _describe_build_or_pass(self, ps: PlayerState, action: int, free: bool = False) -> str:
+    if action == ACTION_PASS:
+      return f"Pass (+{PASS_COINS} coins)"
+    if action == ACTION_WONDER:
+      space = ps.board.wonder[ps.wonder_crossed]
+      step = ps.wonder_crossed + 1
+      return (f"Build Wonder step {step}/{WONDER_SPACES} "
+              f"(cost {space.cost} resources) -> {describe_effects(space.effects)}")
+    die_idx = action - ACTION_BUILD_BASE
+    color = self._forum_colors[die_idx]
+    face = self._forum_faces[die_idx]
+    quadrant_cost = QUADRANT_COSTS[self._forum_quadrant[die_idx]]
+    kind, space, _ctx = self._resolve_die_target(ps, color, face)
+    die_cost_str = "free" if free else f"{ps.effective_die_cost(color, quadrant_cost)} coins"
+    building = BUILDING_NAMES[kind]
+    extra = f" -> {describe_effects(space.effects)}" if space.effects else ""
+    vp_str = f", VP {space.printed_vp}" if space.printed_vp else ""
+    return (f"Use die #{die_idx} ({DIE_COLOR_NAMES[color]}, die cost {die_cost_str}) "
+            f"-> {building} (space cost {space.cost} resources{vp_str}){extra}")
 
   # -- DEAL phase ----------------------------------------------------------
 

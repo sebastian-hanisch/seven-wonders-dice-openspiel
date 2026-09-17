@@ -49,6 +49,23 @@ Run the test suite:
 pytest -q
 ```
 
+## Play against a bot
+
+A small [Streamlit](https://streamlit.io) app (`app.py`) lets you take one
+seat and play against `RandomBot`, `HeuristicBot`, or `SearchBot` (see
+"Bots" below) for the others, in the browser:
+
+```bash
+pip install -e ".[ui]"
+streamlit run app.py
+```
+
+It's a thin UI over the same public `State` API the bots and
+`examples/evaluate_bots.py` use (`legal_actions` / `apply_action(s)` /
+`state.describe_action(player, action)` for human-readable option text /
+`state.player_state(player)`) — nothing game-specific lives in `app.py`
+itself beyond layout.
+
 ## How the game maps to OpenSpiel
 
 - **Dynamics**: `SIMULTANEOUS` — every round, all players privately choose
@@ -142,9 +159,11 @@ src/sevenwonders_dice/
   game.py          both registered Games: the SIMULTANEOUS multiplayer
                    game and its SEQUENTIAL 1-player "solo" variant
   observer.py      human-readable state observations
+  describe.py      human-readable text for buildings/effects/actions
   bots/            RandomBot, HeuristicBot, SearchBot (see "Bots" above)
 tests/             unit + random-playthrough + bot tests
 examples/          random_sim.py, evaluate_bots.py
+app.py             Streamlit human-vs-bot UI (see "Play against a bot")
 ```
 
 ## License
