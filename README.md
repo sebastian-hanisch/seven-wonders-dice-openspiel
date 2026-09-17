@@ -69,6 +69,50 @@ open Market space to fill, which building a wildcard Spy die advances) are
 auto-resolved with a fixed deterministic rule rather than exposed as
 separate decisions.
 
+## Bots
+
+Three bots live in `src/sevenwonders_dice/bots/`, in increasing strength
+(and cost) order:
+
+| Bot | Idea | Cost |
+|---|---|---|
+| `RandomBot` | uniform random legal action | trivial |
+| `HeuristicBot` | greedy: clone + apply each legal action, score the result (VP + coins + resources + building progress), greedily resolve short BONUS-effect chains the same way | cheap |
+| `SearchBot` | flat Monte Carlo / decoupled-UCB1 bandit over its own root actions, backed by short `HeuristicBot`-driven rollouts | ~2-5s per decision by default; a full multi-round game can take several minutes. Lower `num_rollouts`/`horizon_decisions` trade strength for speed. |
+
+They're plain Python classes (`step(state, player) -> action`), not
+`pyspiel.Bot` subclasses — see `bots/base.py` for why. Try them:
+
+```bash
+python examples/evaluate_bots.py --games 50 --seats random,heuristic,search,heuristic
+```
+
+**Why `SIMULTANEOUS` needed a custom search bot**: OpenSpiel's built-in
+`mcts.py` assumes one actor per tree node, so it doesn't apply here
+directly. `SearchBot` instead runs UCB1 as a bandit over *its own* legal
+actions only (no combinatorial blow-up from also branching on what
+opponents might do), evaluating each by simulation. Two things that
+mattered once actually measured, not just designed on paper (see
+`bots/search_bot.py`'s docstring for the full story):
+
+- **Rollout policy quality beats rollout depth.** A first version with
+  uniform-random rollouts to a true terminal state *lost most games to
+  the plain heuristic bot* — simulating "everyone plays randomly from
+  here" is a bad model of an actual opponent. Swapping in a cheap
+  `HeuristicBot` variant for rollouts (and cutting them short instead of
+  always running to terminal) fixed it.
+- **UCB1's exploration constant has to match the reward scale.** The
+  textbook `c = sqrt(2)` assumes rewards in [0, 1]; this game's returns
+  are raw VP totals (~20-100), so the exploration term needs to be
+  normalized or it's negligible next to the mean and the bandit barely
+  explores.
+- Also worth knowing before you tune it: an early version of
+  `HeuristicBot` itself passed ~70% of the time instead of building,
+  because its scoring weighted the guaranteed +3 coins from passing over
+  building progress. Fixed by adding an explicit progress term — see
+  `tests/test_bots.py::test_heuristic_bot_builds_more_than_it_passes`,
+  kept as a regression test.
+
 ## Project layout
 
 ```
@@ -81,8 +125,9 @@ src/sevenwonders_dice/
   state.py         the OpenSpiel State (game loop, legality, scoring)
   game.py          the OpenSpiel Game (registration, GameType/GameInfo)
   observer.py      human-readable state observations
-tests/             unit + random-playthrough tests
-examples/          random_sim.py
+  bots/            RandomBot, HeuristicBot, SearchBot (see "Bots" above)
+tests/             unit + random-playthrough + bot tests
+examples/          random_sim.py, evaluate_bots.py
 ```
 
 ## License

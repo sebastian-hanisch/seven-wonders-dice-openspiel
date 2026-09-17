@@ -157,6 +157,11 @@ class SevenWondersDiceState(pyspiel.State):
     return (f"phase={self._phase} shake_idx={self._shake_die_index} "
             f"bonus_queue={self._bonus_queue} game_over={self._game_over}")
 
+  def player_state(self, player: int) -> PlayerState:
+    """Read-only access to a player's board/economy, for observers and bots.
+    `None` until that player's board has been dealt."""
+    return self._players[player]
+
   # -- DEAL phase ----------------------------------------------------------
 
   def _apply_deal(self, action):
