@@ -80,7 +80,7 @@ def test_heuristic_bot_beats_random_bot_on_average():
 def test_search_bot_always_legal_and_finishes_with_tiny_budget():
   rng = random.Random(0)
   game = pyspiel.load_game("python_seven_wonders_dice", {"players": 2})
-  bots = [RandomBot(rng), SearchBot(max_simulations=8, n_rollouts=1, seed=0)]
+  bots = [RandomBot(rng), SearchBot(max_simulations=8, seed=0)]
   state = play_full_game(game, bots, rng)
   assert state.is_terminal()
 
@@ -92,7 +92,7 @@ def test_search_bot_returns_a_legal_action():
   state = game.new_initial_state()
   advance_through_chance_nodes(state, rng)
 
-  bot = SearchBot(max_simulations=16, n_rollouts=1, seed=0)
+  bot = SearchBot(max_simulations=16, seed=0)
   action = bot.step(state, 0)
   assert action in state.legal_actions(0)
 

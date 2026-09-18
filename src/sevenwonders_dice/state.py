@@ -181,6 +181,14 @@ class SevenWondersDiceState(pyspiel.State):
     return [(c, QUADRANT_COSTS[q])
             for c, q in zip(self._forum_colors, self._forum_quadrant)]
 
+  def forum_details(self):
+    """[(DieColor, quadrant_cost, DieFace), ...] for the 7 Forum dice --
+    like forum_summary() but also exposes each die's currently-rolled
+    DieFace (dice.py), for UIs that want to show *which* building/lane/
+    attack-or-defense a die targets right now, not just its color."""
+    return [(c, QUADRANT_COSTS[q], f) for c, q, f in
+            zip(self._forum_colors, self._forum_quadrant, self._forum_faces)]
+
   def make_solo_snapshot(self, player: int, solo_game) -> "SevenWondersDiceState":
     """Builds a 1-player solo-mode state (see game.py's SEQUENTIAL solo
     game variant) seeded with `player`'s current progress and the live

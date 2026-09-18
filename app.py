@@ -135,7 +135,7 @@ def _render_setup() -> None:
 def _render_forum() -> None:
   state = st.session_state.state
   st.subheader("Forum")
-  st.markdown(render_forum_svg(state.forum_summary()), unsafe_allow_html=True)
+  st.markdown(render_forum_svg(state.forum_details()), unsafe_allow_html=True)
 
 
 def _render_player_panel(state, player: int, label: str) -> None:

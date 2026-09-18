@@ -100,14 +100,15 @@ separate decisions.
 
 ## Bots
 
-Three bots live in `src/sevenwonders_dice/bots/`, in increasing strength
-(and cost) order:
+Three bots live in `src/sevenwonders_dice/bots/`. `RandomBot` is clearly
+the weakest; `HeuristicBot` and `SearchBot` are roughly on par (measured
+below):
 
 | Bot | Idea | Cost |
 |---|---|---|
 | `RandomBot` | uniform random legal action | trivial |
 | `HeuristicBot` | greedy: clone + apply each legal action, score the result (VP + coins + resources + building progress), greedily resolve short BONUS-effect chains the same way | cheap |
-| `SearchBot` | OpenSpiel's own `mcts.MCTSBot`, run on a per-decision snapshot (see below) | ~2-5s per decision at the default 100 simulations; tune `max_simulations` for strength vs. speed |
+| `SearchBot` | OpenSpiel's own `mcts.MCTSBot`, run on a per-decision snapshot, leaves scored by the same heuristic as `HeuristicBot` (see below) | ~0.3s per decision at the default 150 simulations. Measured 45% vs. 55% wins against `HeuristicBot` over 20 games (avg 67.3 vs 68.0 VP) -- competitive, not stronger. |
 
 They're plain Python classes (`step(state, player) -> action`), not
 `pyspiel.Bot` subclasses (`SearchBot` wraps a real `pyspiel.Bot` internally,
