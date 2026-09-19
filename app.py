@@ -16,7 +16,7 @@ import pyspiel
 import streamlit as st
 
 import sevenwonders_dice  # noqa: F401  (registers the games)
-from app_graphics import render_board_svg, render_forum_svg
+from app_graphics import render_board_svg, render_forum_svg, render_legend_svg
 from sevenwonders_dice.bots import HeuristicBot, RandomBot, SearchBot
 from sevenwonders_dice.bots.base import advance_through_chance_nodes
 from sevenwonders_dice.player_state import WONDER_SPACES
@@ -136,19 +136,35 @@ def _render_forum() -> None:
   state = st.session_state.state
   st.subheader("Forum")
   st.markdown(render_forum_svg(state.forum_details()), unsafe_allow_html=True)
+  with st.expander("Legend: die colors & symbols"):
+    st.markdown(render_legend_svg(), unsafe_allow_html=True)
+    st.caption("Every board space shows its resource cost (bottom-left) "
+               "and reward (bottom-right); hover a space for its exact "
+               "effect text.")
 
 
-def _render_player_panel(state, player: int, label: str) -> None:
+def _render_player_summary(state, player: int, label: str) -> None:
+  """Compact metrics that fit in a narrow N-way column; the detailed,
+  numbers-on-every-space board SVG needs full page width to stay legible
+  (see _render_player_board) so it isn't nested in here."""
   ps = state.player_state(player)
-  with st.expander(f"{label} -- {ps.board.city} ({ps.board.wonder_name})",
+  st.caption(f"{label} -- {ps.board.city} ({ps.board.wonder_name})")
+  c1, c2, c3, c4 = st.columns(4)
+  c1.metric("Coins", ps.coins)
+  c2.metric("Res.", ps.resources)
+  c3.metric("Wonder", f"{ps.wonder_crossed}/{WONDER_SPACES}")
+  c4.metric("Bonus", f"{ps.bonus_crossed}/3")
+  st.progress(min(1.0, ps.total_end_game_vp() / 60.0),
+              text=f"~{ps.total_end_game_vp()} VP so far")
+
+
+def _render_player_board(state, player: int, label: str) -> None:
+  """The full board (every space's real cost/reward, per RULES.md) --
+  rendered full-width, not squeezed into an N-way column, so its printed
+  numbers stay readable."""
+  ps = state.player_state(player)
+  with st.expander(f"{label} -- {ps.board.city} ({ps.board.wonder_name}) -- board",
                     expanded=(player == st.session_state.human_seat)):
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Coins", ps.coins)
-    c2.metric("Res.", ps.resources)
-    c3.metric("Wonder", f"{ps.wonder_crossed}/{WONDER_SPACES}")
-    c4.metric("Bonus", f"{ps.bonus_crossed}/3")
-    st.progress(min(1.0, ps.total_end_game_vp() / 60.0),
-                text=f"~{ps.total_end_game_vp()} VP so far")
     st.markdown(render_board_svg(ps), unsafe_allow_html=True)
 
 
@@ -191,7 +207,10 @@ def _render_game() -> None:
   cols = st.columns(state.num_players())
   for p in range(state.num_players()):
     with cols[p]:
-      _render_player_panel(state, p, "You" if p == human else f"Player {p}")
+      _render_player_summary(state, p, "You" if p == human else f"Player {p}")
+
+  for p in range(state.num_players()):
+    _render_player_board(state, p, "You" if p == human else f"Player {p}")
 
   _render_vp_chart()
 

@@ -31,7 +31,7 @@ def apply_immediate(effect: Effect, player, resolver) -> None:
   if t == EffectType.CROSS_SPACE:
     resolver.auto_cross_space(player, effect.building)
   elif t == EffectType.CROSS_SPACE_ONE_OF:
-    resolver.auto_cross_one_of(player, effect.buildings)
+    resolver.queue_cross_one_of(player, effect.buildings)
   elif t == EffectType.CROSS_UP_TO_TWO:
     resolver.auto_cross_space(player, effect.building)
     resolver.auto_cross_space(player, effect.building)

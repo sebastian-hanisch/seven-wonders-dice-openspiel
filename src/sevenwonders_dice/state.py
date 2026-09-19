@@ -1,20 +1,21 @@
 """The OpenSpiel State for 7 Wonders Dice.
 
-Simplifications made to keep the action space tractable (documented in
-RULES.md too):
-  - Agora: the rulebook's "each space takes either of 2 symbols" is read as
-    every space accepting any blue-die face -- i.e. Agora is a single
-    ordered sequence, not two independently-gated tracks.
-  - Market ("any order"): the engine auto-picks the cheapest still-open
-    space rather than exposing a sub-choice, to avoid an extra decision
-    dimension on every yellow-die pick.
-  - Effect-driven crossings (CROSS_SPACE / CROSS_SPACE_ONE_OF / the Spy's
-    wildcard building, University lane for non-green-die crossings) use a
-    fixed deterministic preference order rather than a further player
-    decision.
+Remaining simplifications, kept for a tractable action space (documented in
+RULES.md too -- Agora's dual track, Market's per-space choice, and
+CROSS_SPACE_ONE_OF are all now resolved exactly, no longer on this list):
+  - Effect-driven crossings that aren't a real player choice (CROSS_SPACE /
+    the Spy's wildcard building / University lane for non-green-die
+    crossings) use a fixed deterministic preference order: whichever target
+    is actually available, ties broken by least-progressed-first (Agora
+    group) or a fixed lane order (University) -- there's no source telling
+    us the physical rule ever exposes a choice here.
   - The Black (Spy) wildcard and CROSS_SPACE(BARRACKS_*) effects always
     advance the *attack* track (defense is only reachable via the Red die's
-    actual defense faces).
+    actual defense faces) -- the Spy's own die faces aren't clearly
+    photographed, so which track its Barracks icon means isn't confirmed.
+  - The Spy wildcard targeting Market still auto-picks the cheapest open
+    space (only a direct Yellow-die pick exposes the real space choice) --
+    same reasoning as the Barracks case above.
 """
 
 import pyspiel
@@ -41,11 +42,16 @@ from sevenwonders_dice.player_state import (AGORA_SPACES,
                                              PlayerState)
 
 # Round-action encoding (also reused for BONUS-phase extra actions):
-#   0 = PASS, 1 = WONDER, 2..8 = BUILD using Forum die at index (action - 2)
+#   0 = PASS, 1 = WONDER, 2..8 = BUILD using Forum die at index (action - 2),
+#   9..14 = build Market space (action - 9) using the (always exactly one)
+#   Yellow die -- a real space choice, not the generic per-die slot, since
+#   Market is fillable "in any order" (see boards.py) and which space you
+#   pick matters (different costs/effects per space).
 ACTION_PASS = 0
 ACTION_WONDER = 1
 ACTION_BUILD_BASE = 2
-NUM_ROUND_ACTIONS = ACTION_BUILD_BASE + NUM_FORUM_DICE  # 9
+ACTION_MARKET_BASE = ACTION_BUILD_BASE + NUM_FORUM_DICE  # 9
+NUM_ROUND_ACTIONS = ACTION_MARKET_BASE + MARKET_SPACES  # 9 + 6 = 15
 
 _TOTAL_SPACES = {
     BuildingKind.WAREHOUSE: WAREHOUSE_SPACES,
@@ -60,10 +66,12 @@ _TOTAL_SPACES = {
 
 
 def _simple_building_def(board: BoardDef, kind: BuildingKind) -> BuildingDef:
+  # AGORA and MARKET are deliberately absent: both have their own dedicated
+  # resolution (_next_agora* / _next_market) since a flat "next index in
+  # board order" doesn't apply to them (Agora is 2 gated tracks, Market is
+  # fillable in any order) -- see boards.py / RULES.md.
   return {
       BuildingKind.WAREHOUSE: board.warehouse,
-      BuildingKind.AGORA: board.agora,
-      BuildingKind.MARKET: board.market,
       BuildingKind.GUILD_COURT: board.guild_court,
       BuildingKind.GALLERY: board.gallery,
   }[kind]
@@ -234,6 +242,11 @@ class SevenWondersDiceState(pyspiel.State):
         return "(free action, no die cost) " + self._describe_build_or_pass(ps, action, free=True)
       if kind == "ANY":
         return "(bonus action) " + self._describe_build_or_pass(ps, action)
+      if kind == "CROSS_ONE_OF":
+        buildings = _arg
+        if action < len(buildings):
+          return f"Cross a space of {BUILDING_NAMES[buildings[action]]}"
+        return "(no valid target to cross)"
       raise ValueError(kind)
     return self._describe_build_or_pass(ps, action)
 
@@ -245,6 +258,15 @@ class SevenWondersDiceState(pyspiel.State):
       step = ps.wonder_crossed + 1
       return (f"Build Wonder step {step}/{WONDER_SPACES} "
               f"(cost {space.cost} resources) -> {describe_effects(space.effects)}")
+    if action >= ACTION_MARKET_BASE:
+      space_idx = action - ACTION_MARKET_BASE
+      space = ps.board.market.spaces[space_idx]
+      yellow_idx = self._forum_colors.index(DieColor.YELLOW)
+      quadrant_cost = QUADRANT_COSTS[self._forum_quadrant[yellow_idx]]
+      die_cost_str = "free" if free else f"{ps.effective_die_cost(DieColor.YELLOW, quadrant_cost)} coins"
+      extra = f" -> {describe_effects(space.effects)}" if space.effects else ""
+      return (f"Use Yellow die (die cost {die_cost_str}) -> Market space "
+              f"#{space_idx + 1} (space cost {space.cost} resources){extra}")
     die_idx = action - ACTION_BUILD_BASE
     color = self._forum_colors[die_idx]
     face = self._forum_faces[die_idx]
@@ -289,8 +311,11 @@ class SevenWondersDiceState(pyspiel.State):
       if ps.can_pay(space.cost):
         actions.append(ACTION_WONDER)
     for die_idx in range(NUM_FORUM_DICE):
+      if self._forum_colors[die_idx] == DieColor.YELLOW:
+        continue  # see _legal_market_actions -- a separate, explicit choice
       if self._can_build_with_die(ps, die_idx):
         actions.append(ACTION_BUILD_BASE + die_idx)
+    actions.extend(self._legal_market_actions(ps))
     return actions
 
   def _can_build_with_die(self, ps: PlayerState, die_idx: int) -> bool:
@@ -315,7 +340,7 @@ class SevenWondersDiceState(pyspiel.State):
     if color == DieColor.YELLOW:
       return self._next_market(ps)
     if color == DieColor.BLUE:
-      return self._next_simple(ps, BuildingKind.AGORA)
+      return self._next_agora(ps, face.agora_group)
     if color == DieColor.WHITE:
       return self._next_simple(ps, BuildingKind.GALLERY)
     if color == DieColor.PURPLE:
@@ -335,6 +360,35 @@ class SevenWondersDiceState(pyspiel.State):
       return None, None, None
     return kind, bdef.spaces[idx], None
 
+  def _next_agora(self, ps, group):
+    """The next not-yet-crossed Agora space in symbol `group`'s (0 or 1)
+    own track -- Agora is two independently-gated tracks, one per blue-die
+    symbol group (rulebook: "each space takes either of 2 symbols"), not a
+    single sequence."""
+    if group is None:
+      return None, None, None
+    group_spaces = [s for s in ps.board.agora.spaces if s.agora_symbol_group == group]
+    idx = ps.agora_group_progress[group]
+    if idx >= len(group_spaces):
+      return None, None, None
+    return BuildingKind.AGORA, group_spaces[idx], group
+
+  def _agora_best_group(self, ps):
+    """Which Agora group an effect-driven crossing (not an actual blue-die
+    pick) should advance: whichever group still has an open space, ties
+    (and the common case of both open) broken toward the *less* advanced
+    group -- a documented preference order, not a confirmed rule."""
+    for group in sorted((0, 1), key=lambda g: ps.agora_group_progress[g]):
+      if self._next_agora(ps, group)[0] is not None:
+        return group
+    return None
+
+  def _next_agora_auto(self, ps):
+    group = self._agora_best_group(ps)
+    if group is None:
+      return None, None, None
+    return self._next_agora(ps, group)
+
   def _next_market(self, ps):
     bdef = ps.board.market
     open_idxs = [i for i in range(len(bdef.spaces))
@@ -343,6 +397,43 @@ class SevenWondersDiceState(pyspiel.State):
       return None, None, None
     best = min(open_idxs, key=lambda i: bdef.spaces[i].cost)
     return BuildingKind.MARKET, bdef.spaces[best], best
+
+  def _legal_market_actions(self, ps, waive_die_cost=False):
+    """Legal ACTION_MARKET_BASE+i actions: building Market via the Yellow
+    die is a real choice of *which* open space to fill (not auto-picked),
+    since Market is fillable in any order and spaces differ in cost/effect."""
+    if waive_die_cost:
+      die_cost = 0
+    else:
+      yellow_idx = self._forum_colors.index(DieColor.YELLOW)
+      quadrant_cost = QUADRANT_COSTS[self._forum_quadrant[yellow_idx]]
+      die_cost = ps.effective_die_cost(DieColor.YELLOW, quadrant_cost)
+      if ps.coins < die_cost:
+        return []
+    bdef = ps.board.market
+    return [ACTION_MARKET_BASE + i for i, space in enumerate(bdef.spaces)
+            if not (ps.market_crossed_mask >> i) & 1
+            and ps.coins - die_cost >= max(0, space.cost - ps.resources)]
+
+  def _resolve_action_build(self, ps, action):
+    """Like _resolve_die_target, but for a full round/bonus action id
+    (everything except PASS/WONDER): returns (color, quadrant_cost, kind,
+    space, ctx), with kind=None if the action is no longer resolvable."""
+    if action >= ACTION_MARKET_BASE:
+      space_idx = action - ACTION_MARKET_BASE
+      bdef = ps.board.market
+      if space_idx >= len(bdef.spaces) or (ps.market_crossed_mask >> space_idx) & 1:
+        return None, 0, None, None, None
+      yellow_idx = self._forum_colors.index(DieColor.YELLOW)
+      quadrant_cost = QUADRANT_COSTS[self._forum_quadrant[yellow_idx]]
+      return (DieColor.YELLOW, quadrant_cost, BuildingKind.MARKET,
+              bdef.spaces[space_idx], space_idx)
+    die_idx = action - ACTION_BUILD_BASE
+    color = self._forum_colors[die_idx]
+    face = self._forum_faces[die_idx]
+    quadrant_cost = QUADRANT_COSTS[self._forum_quadrant[die_idx]]
+    kind, space, ctx = self._resolve_die_target(ps, color, face)
+    return color, quadrant_cost, kind, space, ctx
 
   def _next_guild_court(self, ps, target_building):
     idx = ps.guild_crossed
@@ -407,6 +498,8 @@ class SevenWondersDiceState(pyspiel.State):
       return None, None, None
     if building == BuildingKind.MARKET:
       return self._next_market(ps)
+    if building == BuildingKind.AGORA:
+      return self._next_agora_auto(ps)
     return self._next_simple(ps, building)
 
   def _resolve_round(self):
@@ -429,15 +522,16 @@ class SevenWondersDiceState(pyspiel.State):
       ps.wonder_crossed += 1
       self._apply_space_effects(player, space)
       return
-    die_idx = action - ACTION_BUILD_BASE
-    color = self._forum_colors[die_idx]
-    face = self._forum_faces[die_idx]
-    quadrant_cost = QUADRANT_COSTS[self._forum_quadrant[die_idx]]
+    color, quadrant_cost, kind, space, ctx = self._resolve_action_build(ps, action)
+    if kind is None:
+      return  # became illegal (e.g. a shared die/space was contested); no-op
     die_cost = ps.effective_die_cost(color, quadrant_cost)
-    kind, space, ctx = self._resolve_die_target(ps, color, face)
-    if kind is None or ps.coins < die_cost or not ps.can_pay(
-        space.cost, coin_cost=die_cost):
-      return  # became illegal (e.g. a shared die was contested); no-op
+    if ps.coins < die_cost or not ps.can_pay(space.cost, coin_cost=die_cost):
+      return
+    self._perform_die_build(player, color, die_cost, kind, space, ctx)
+
+  def _perform_die_build(self, player, color, die_cost, kind, space, ctx):
+    ps = self._players[player]
     ps.coins -= die_cost
     ps.coins += ps.coins_on_die_choice.get(color, 0)
     ps.pay(space.cost)
@@ -454,8 +548,9 @@ class SevenWondersDiceState(pyspiel.State):
       ps.warehouse_crossed += 1
       ps.resources += 1
     elif kind == BuildingKind.AGORA:
-      ps.agora_crossed += 1
-      if ps.agora_crossed == AGORA_SPACES and self._agora_first_completer is None:
+      ps.agora_group_progress[ctx] += 1
+      if (ps.building_progress(BuildingKind.AGORA) == AGORA_SPACES
+          and self._agora_first_completer is None):
         self._agora_first_completer = player
         ps.banked_end_game_vp += ps.board.agora_completion_bonus_vp
     elif kind == BuildingKind.MARKET:
@@ -518,31 +613,38 @@ class SevenWondersDiceState(pyspiel.State):
   def auto_cross_space(self, ps: PlayerState, kind: BuildingKind) -> None:
     self._auto_cross(ps, kind)
 
-  def auto_cross_one_of(self, ps: PlayerState, kinds) -> None:
-    for kind in kinds:
-      if ps.building_progress(kind) < _TOTAL_SPACES.get(kind, 0):
-        if self._auto_cross(ps, kind):
-          return
+  def queue_cross_one_of(self, ps: PlayerState, buildings) -> None:
+    """CROSS_SPACE_ONE_OF is a real player choice (which building to
+    advance), resolved as a BONUS-phase decision -- see _legal_bonus_actions
+    / _apply_bonus_action's "CROSS_ONE_OF" case."""
+    ps.pending_bonus_actions.append(("CROSS_ONE_OF", tuple(buildings)))
+
+  def _peek_next_cross(self, ps: PlayerState, kind: BuildingKind):
+    """Read-only version of what _auto_cross(ps, kind) would advance next,
+    without mutating anything -- used both to perform the crossing and to
+    check whether `kind` is a legal choice for a pending CROSS_ONE_OF
+    decision."""
+    if kind == BuildingKind.GUILD_COURT:
+      return None, None, None  # gated by a die-face comparison target
+    if kind == BuildingKind.AGORA:
+      return self._next_agora_auto(ps)
+    if kind in (BuildingKind.WAREHOUSE, BuildingKind.GALLERY):
+      return self._next_simple(ps, kind)
+    if kind == BuildingKind.MARKET:
+      return self._next_market(ps)
+    if kind == BuildingKind.UNIVERSITY:
+      for lane in ("black", "purple", "white"):
+        if ps.univ_lane_progress[lane] < UNIVERSITY_LANE_SPACES:
+          return self._next_university(ps, lane)
+      return None, None, None
+    if kind in (BuildingKind.BARRACKS_WEST, BuildingKind.BARRACKS_EAST):
+      is_west = kind == BuildingKind.BARRACKS_WEST
+      return self._next_barracks(ps, is_west, True)
+    return None, None, None
 
   def _auto_cross(self, ps: PlayerState, kind: BuildingKind) -> bool:
     player = self._players.index(ps)
-    if kind == BuildingKind.GUILD_COURT:
-      return False  # gated by a die-face comparison target; skip for effects
-    if kind in (BuildingKind.WAREHOUSE, BuildingKind.AGORA, BuildingKind.GALLERY):
-      k2, space, ctx = self._next_simple(ps, kind)
-    elif kind == BuildingKind.MARKET:
-      k2, space, ctx = self._next_market(ps)
-    elif kind == BuildingKind.UNIVERSITY:
-      k2, space, ctx = None, None, None
-      for lane in ("black", "purple", "white"):
-        if ps.univ_lane_progress[lane] < UNIVERSITY_LANE_SPACES:
-          k2, space, ctx = self._next_university(ps, lane)
-          break
-    elif kind in (BuildingKind.BARRACKS_WEST, BuildingKind.BARRACKS_EAST):
-      is_west = kind == BuildingKind.BARRACKS_WEST
-      k2, space, ctx = self._next_barracks(ps, is_west, True)
-    else:
-      return False
+    k2, space, ctx = self._peek_next_cross(ps, kind)
     if k2 is None or not ps.can_pay(space.cost):
       return False
     ps.pay(space.cost)
@@ -577,7 +679,7 @@ class SevenWondersDiceState(pyspiel.State):
 
   def _legal_bonus_actions(self, player):
     ps = self._players[player]
-    kind, _arg = ps.pending_bonus_actions[0]
+    kind, arg = ps.pending_bonus_actions[0]
     if kind == "CHOOSE_BONUS":
       return [i for i in range(NUM_BONUS_SLOTS)
               if not (ps.bonus_used_mask >> i) & 1] or [0]
@@ -585,21 +687,29 @@ class SevenWondersDiceState(pyspiel.State):
       actions = []
       for die_idx in range(NUM_FORUM_DICE):
         color = self._forum_colors[die_idx]
+        if color == DieColor.YELLOW:
+          continue  # see _legal_market_actions -- a separate, explicit choice
         if color in SPECIAL_DICE and color not in ps.unlocked_by_me:
           continue
         face = self._forum_faces[die_idx]
         k, space, _ctx = self._resolve_die_target(ps, color, face)
         if k is not None and ps.can_pay(space.cost):
           actions.append(ACTION_BUILD_BASE + die_idx)
+      actions.extend(self._legal_market_actions(ps, waive_die_cost=True))
       return actions or [ACTION_PASS]
     if kind == "ANY":
-      acts = self._legal_round_actions(player)
-      return acts
+      return self._legal_round_actions(player)
+    if kind == "CROSS_ONE_OF":
+      buildings = arg
+      choices = [i for i, b in enumerate(buildings)
+                 if self._peek_next_cross(ps, b)[0] is not None
+                 and ps.can_pay(self._peek_next_cross(ps, b)[1].cost)]
+      return choices or [0]
     raise ValueError(kind)
 
   def _apply_bonus_action(self, player, action):
     ps = self._players[player]
-    kind, _arg = ps.pending_bonus_actions.pop(0)
+    kind, arg = ps.pending_bonus_actions.pop(0)
     if kind == "CHOOSE_BONUS":
       if not ((ps.bonus_used_mask >> action) & 1) and action < NUM_BONUS_SLOTS:
         ps.bonus_used_mask |= (1 << action)
@@ -611,20 +721,17 @@ class SevenWondersDiceState(pyspiel.State):
       return
     if kind == "FREE_A":
       if action != ACTION_PASS:
-        die_idx = action - ACTION_BUILD_BASE
-        color = self._forum_colors[die_idx]
-        face = self._forum_faces[die_idx]
-        kind2, space, ctx = self._resolve_die_target(ps, color, face)
+        color, _qc, kind2, space, ctx = self._resolve_action_build(ps, action)
         if kind2 is not None and ps.can_pay(space.cost):
-          ps.pay(space.cost)
-          self._advance_building(player, kind2, ctx)
-          if kind2 in (BuildingKind.BARRACKS_WEST, BuildingKind.BARRACKS_EAST) and ctx == "attack":
-            self._score_barracks_attack(player, kind2, space)
-          self._apply_space_effects(player, space)
-          self._maybe_trigger_bonus(player, kind2)
+          self._perform_die_build(player, color, 0, kind2, space, ctx)
       return
     if kind == "ANY":
       self._apply_round_action(player, action)
+      return
+    if kind == "CROSS_ONE_OF":
+      buildings = arg
+      if 0 <= action < len(buildings):
+        self._auto_cross(ps, buildings[action])
       return
     raise ValueError(kind)
 

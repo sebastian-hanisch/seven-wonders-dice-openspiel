@@ -64,16 +64,27 @@ correcting a number doesn't require touching the engine.
 
 ## Deliberate simplifications (for a tractable action space)
 
-- **Agora**: the rulebook's "each space takes either of 2 symbols on the
-  blue die" is read as *every* blue-die face working on *any* Agora
-  space (a single ordered sequence), not two independently-gated tracks.
-- **Market** ("any order"): the engine auto-picks the cheapest still-open
-  space rather than exposing which-space-to-fill as a separate decision.
-- **Spy (black die) wildcard** and any generic `CROSS_SPACE`/
-  `CROSS_SPACE_ONE_OF` effect: when the target is Barracks, always
-  advances the *attack* track (defense is only reachable via the Red
-  die's actual defense faces); when the target is University, advances
-  the first not-yet-complete lane in a fixed order.
+Three former simplifications are now resolved exactly and no longer listed
+here: **Agora** is modeled as its real 2 independently-gated symbol-group
+tracks (a blue-die face only advances *its own* group's spaces, never the
+other group's); building **Market** via the Yellow die is a real choice of
+which open space to fill (not an auto-picked cheapest one, since Market is
+fillable "in any order" and spaces differ in cost/effect); and every
+`CROSS_SPACE_ONE_OF` effect (the standard bonus slot's Warehouse/Agora/
+Market choice, Halicarnassus's Wonder step 2) is a real player decision,
+resolved as its own BONUS-phase step, not a fixed preference order.
+
+What's still simplified:
+
+- **Spy (black die) wildcard** and any generic `CROSS_SPACE` effect: when
+  the target is Barracks, always advances the *attack* track (defense is
+  only reachable via the Red die's actual defense faces); when the target
+  is Market, auto-picks the cheapest open space (only a direct Yellow-die
+  pick exposes the real choice); when the target is University, advances
+  the first not-yet-complete lane in a fixed order. In each case the die's
+  own faces aren't clearly photographed enough to confirm whether the
+  physical rule ever exposes a choice here, so a fixed, documented
+  preference order is used instead of guessing at one.
 - **University-unlock die swap**: the rulebook has the replaced grey die
   "chosen randomly"; the engine picks the first grey slot deterministically
   instead of spending a chance node on a cosmetic detail.

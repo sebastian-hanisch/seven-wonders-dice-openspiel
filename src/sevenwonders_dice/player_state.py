@@ -30,7 +30,7 @@ class PlayerState:
     self.coins = STARTING_COINS
 
     self.warehouse_crossed = 0
-    self.agora_crossed = 0
+    self.agora_group_progress: Dict[int, int] = {0: 0, 1: 0}
     self.market_crossed_mask = 0
     self.univ_lane_progress: Dict[str, int] = {"black": 0, "purple": 0, "white": 0}
     self.guild_crossed = 0
@@ -67,7 +67,7 @@ class PlayerState:
     if kind == BuildingKind.WAREHOUSE:
       return self.warehouse_crossed
     if kind == BuildingKind.AGORA:
-      return self.agora_crossed
+      return sum(self.agora_group_progress.values())
     if kind == BuildingKind.MARKET:
       return bin(self.market_crossed_mask).count("1")
     if kind == BuildingKind.UNIVERSITY:
@@ -99,6 +99,17 @@ class PlayerState:
   def can_pay(self, resource_cost: int, coin_cost: int = 0) -> bool:
     shortfall = max(0, resource_cost - self.resources)
     return self.coins >= (shortfall + coin_cost)
+
+  def agora_space_crossed(self, space_index: int) -> bool:
+    """Whether Agora space `space_index` (0-based, board order) has been
+    crossed -- Agora is two independently-gated tracks (one per blue-die
+    symbol group), so this is not simply `space_index < total_crossed`;
+    a space is crossed once its own group's track has reached its rank
+    within that group."""
+    spaces = self.board.agora.spaces
+    group = spaces[space_index].agora_symbol_group
+    rank = sum(1 for s in spaces[:space_index + 1] if s.agora_symbol_group == group)
+    return rank <= self.agora_group_progress[group]
 
   def add_vp_per_space(self, building: BuildingKind, rate: int) -> None:
     self.vp_per_space_rates[building] = max(self.vp_per_space_rates.get(building, 0), rate)

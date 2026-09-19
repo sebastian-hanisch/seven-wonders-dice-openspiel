@@ -16,7 +16,7 @@ class _FakeResolver:
   def auto_cross_space(self, player, building):
     self.crossed.append(building)
 
-  def auto_cross_one_of(self, player, buildings):
+  def queue_cross_one_of(self, player, buildings):
     self.crossed.append(("one_of", tuple(buildings)))
 
   def unlock_special_die(self, player, color):
@@ -75,6 +75,14 @@ def test_cross_space_delegates_to_resolver():
   apply_immediate(Effect(EffectType.CROSS_SPACE, building=BuildingKind.AGORA),
                    p, r)
   assert r.crossed == [BuildingKind.AGORA]
+
+
+def test_cross_space_one_of_queues_a_bonus_choice():
+  p, r = _player(), _FakeResolver()
+  apply_immediate(Effect(EffectType.CROSS_SPACE_ONE_OF,
+                          buildings=(BuildingKind.WAREHOUSE, BuildingKind.AGORA)),
+                   p, r)
+  assert r.crossed == [("one_of", (BuildingKind.WAREHOUSE, BuildingKind.AGORA))]
 
 
 def test_coin_and_vp_per_space_pays_now_and_banks_multiplier():
