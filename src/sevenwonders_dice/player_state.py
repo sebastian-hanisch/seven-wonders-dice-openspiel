@@ -97,8 +97,16 @@ class PlayerState:
     self.coins -= (shortfall + coin_cost)
 
   def can_pay(self, resource_cost: int, coin_cost: int = 0) -> bool:
+    return self.can_pay_with(resource_cost, self.coins, coin_cost)
+
+  def can_pay_with(self, resource_cost: int, available_coins: int,
+                    coin_cost: int = 0) -> bool:
+    """Like can_pay, but checks against `available_coins` instead of
+    self.coins -- for checking a further cost's affordability when some
+    coins are already earmarked elsewhere (e.g. a die cost about to be
+    paid alongside it)."""
     shortfall = max(0, resource_cost - self.resources)
-    return self.coins >= (shortfall + coin_cost)
+    return available_coins >= (shortfall + coin_cost)
 
   def agora_space_crossed(self, space_index: int) -> bool:
     """Whether Agora space `space_index` (0-based, board order) has been

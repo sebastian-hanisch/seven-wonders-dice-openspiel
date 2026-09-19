@@ -13,8 +13,8 @@ class _FakeResolver:
     self.crossed = []
     self.unlocked = []
 
-  def auto_cross_space(self, player, building):
-    self.crossed.append(building)
+  def begin_cross(self, player, building, times=1):
+    self.crossed.append((building, times))
 
   def queue_cross_one_of(self, player, buildings):
     self.crossed.append(("one_of", tuple(buildings)))
@@ -74,7 +74,14 @@ def test_cross_space_delegates_to_resolver():
   p, r = _player(), _FakeResolver()
   apply_immediate(Effect(EffectType.CROSS_SPACE, building=BuildingKind.AGORA),
                    p, r)
-  assert r.crossed == [BuildingKind.AGORA]
+  assert r.crossed == [(BuildingKind.AGORA, 1)]
+
+
+def test_cross_up_to_two_delegates_to_resolver_with_times_2():
+  p, r = _player(), _FakeResolver()
+  apply_immediate(Effect(EffectType.CROSS_UP_TO_TWO,
+                          building=BuildingKind.BARRACKS_WEST), p, r)
+  assert r.crossed == [(BuildingKind.BARRACKS_WEST, 2)]
 
 
 def test_cross_space_one_of_queues_a_bonus_choice():

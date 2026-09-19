@@ -190,6 +190,29 @@ def _render_vp_chart() -> None:
   st.plotly_chart(fig, use_container_width=True)
 
 
+def _render_winner(state, human: int, returns) -> None:
+  """The real tiebreak is "most unspent coins", then a *shared* victory if
+  still tied (RULES.md) -- state.returns() already ranks players exactly
+  right for this (a coin nudge that can never outweigh a real VP
+  difference), but naively taking its max() would silently pick only the
+  first of several exactly-tied players. Compare the real (VP, coins)
+  pairs instead so an actual tie is shown as a shared win, not a coin
+  flip."""
+  scores = [(state.player_state(p).total_end_game_vp(), state.player_state(p).coins)
+            for p in range(state.num_players())]
+  best = max(scores)
+  winners = [p for p in range(state.num_players()) if scores[p] == best]
+  names = ["You" if p == human else f"Player {p}" for p in winners]
+  final = f"Final scores: {[round(r) for r in returns]}"
+  if len(winners) > 1:
+    st.info(f"Shared victory ({best[0]} VP, {best[1]} coins each): "
+            f"{', '.join(names)}. {final}")
+  elif winners[0] == human:
+    st.success(f"You win! {final}")
+  else:
+    st.error(f"{names[0]} wins. {final}")
+
+
 def _render_game() -> None:
   state = st.session_state.state
   human = st.session_state.human_seat
@@ -219,12 +242,8 @@ def _render_game() -> None:
 
   if state.is_terminal():
     returns = state.returns()
-    winner = max(range(state.num_players()), key=lambda p: returns[p])
     st.header("\U0001F3C1 Game over")
-    if winner == human:
-      st.success(f"You win! Final scores: {[round(r) for r in returns]}")
-    else:
-      st.error(f"Player {winner} wins. Final scores: {[round(r) for r in returns]}")
+    _render_winner(state, human, returns)
     return
 
   st.subheader("Your move")

@@ -29,12 +29,11 @@ def apply_immediate(effect: Effect, player, resolver) -> None:
   """
   t = effect.type
   if t == EffectType.CROSS_SPACE:
-    resolver.auto_cross_space(player, effect.building)
+    resolver.begin_cross(player, effect.building, times=1)
   elif t == EffectType.CROSS_SPACE_ONE_OF:
     resolver.queue_cross_one_of(player, effect.buildings)
   elif t == EffectType.CROSS_UP_TO_TWO:
-    resolver.auto_cross_space(player, effect.building)
-    resolver.auto_cross_space(player, effect.building)
+    resolver.begin_cross(player, effect.building, times=2)
   elif t == EffectType.GAIN_COINS:
     player.coins += effect.amount
   elif t == EffectType.FREE_ACTION_A_NO_DIE_COST:

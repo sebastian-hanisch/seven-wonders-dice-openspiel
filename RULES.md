@@ -62,36 +62,54 @@ which is where the Medium/Low-Medium confidence above applies.
 and the Agora/Market/Guild Court exact costs. Everything is plain data —
 correcting a number doesn't require touching the engine.
 
-## Deliberate simplifications (for a tractable action space)
+## Rule simplifications: none remaining
 
-Three former simplifications are now resolved exactly and no longer listed
-here: **Agora** is modeled as its real 2 independently-gated symbol-group
-tracks (a blue-die face only advances *its own* group's spaces, never the
-other group's); building **Market** via the Yellow die is a real choice of
-which open space to fill (not an auto-picked cheapest one, since Market is
-fillable "in any order" and spaces differ in cost/effect); and every
-`CROSS_SPACE_ONE_OF` effect (the standard bonus slot's Warehouse/Agora/
-Market choice, Halicarnassus's Wonder step 2) is a real player decision,
-resolved as its own BONUS-phase step, not a fixed preference order.
+Earlier versions of this engine took several shortcuts to keep the action
+space small. All of them are now resolved into the exact (or best-supported)
+rule instead:
 
-What's still simplified:
+- **Agora** is modeled as its real 2 independently-gated symbol-group
+  tracks — a blue-die face only advances *its own* group's spaces, never
+  the other group's (previously a single flat sequence, which could let a
+  group-0 die complete a group-1 space).
+- Building **Market** via the Yellow die is a real choice of which open
+  space to fill, not an auto-picked cheapest one — Market is fillable "in
+  any order" and spaces differ in cost/effect, so which one you pick is a
+  real decision.
+- Every `CROSS_SPACE_ONE_OF` effect (the standard bonus slot's
+  Warehouse/Agora/Market choice, Halicarnassus's Wonder step 2) is a real
+  BONUS-phase player decision, not a fixed preference order.
+- Any other "cross a space of X" resolution that could be ambiguous — the
+  **Spy (black die) wildcard** targeting Barracks (attack vs. defense),
+  Market (which space), or University (which lane); `CROSS_SPACE` /
+  `CROSS_UP_TO_TWO` effects with the same ambiguity (e.g. Rhodes's Wonder
+  step 2, "up to two" Barracks spaces) — is now also a real BONUS-phase
+  choice (`_cross_options` / `begin_cross` in `state.py`), the same way
+  choosing *which building* already was. There's no photo clearly enough
+  showing the Spy's own die faces to *confirm* the physical rule always
+  exposes a choice here, but a choice is the safe, consistent read: every
+  other instance of this pattern in the game already is one, and if the
+  true rule secretly forces one option, giving the player a choice changes
+  nothing (they'd just always take it).
+- **University-unlock die swap**: the rulebook says the replaced grey die
+  is "chosen randomly" — modeled as a genuine chance node (see `state.py`'s
+  `UNLOCK_CHANCE` phase), deferred to right before the *next* SHAKE rather
+  than applied immediately mid-round. That also fixes the swap's *timing*,
+  not just its randomness: the physical game can only swap a die between
+  rounds (this round's dice are already shaken/committed), so a same-round
+  pick could never have seen a just-unlocked die either.
+- **Tiebreak** ("most unspent coins", then shared victory): `returns()`
+  already ranks players exactly right for this (VP, then a coin nudge that
+  can never outweigh a real VP difference) — a genuine tie is a
+  presentation concern (declaring a *shared* winner instead of picking the
+  first of several tied players), so it's handled in `app.py`'s
+  terminal-state screen, not the engine.
 
-- **Spy (black die) wildcard** and any generic `CROSS_SPACE` effect: when
-  the target is Barracks, always advances the *attack* track (defense is
-  only reachable via the Red die's actual defense faces); when the target
-  is Market, auto-picks the cheapest open space (only a direct Yellow-die
-  pick exposes the real choice); when the target is University, advances
-  the first not-yet-complete lane in a fixed order. In each case the die's
-  own faces aren't clearly photographed enough to confirm whether the
-  physical rule ever exposes a choice here, so a fixed, documented
-  preference order is used instead of guessing at one.
-- **University-unlock die swap**: the rulebook has the replaced grey die
-  "chosen randomly"; the engine picks the first grey slot deterministically
-  instead of spending a chance node on a cosmetic detail.
-- **Tiebreak**: the real tiebreak ("most unspent coins", then shared
-  victory) is folded into the returned utility as a small nudge
-  (`VP + coins * 1e-3`) so it influences ranking without ever being able
-  to outweigh a real VP difference.
+**What's not a rule simplification, and can't be resolved the same way**:
+6 of the 7 cities' exact Wonder numbers are Medium/Low-Medium confidence
+(see the confidence table above) because no source photo shows them
+clearly — that's a data problem, fixable only with a clearer photo or a
+physical copy, not an engine change.
 
 ## Effect vocabulary
 
